@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Solar System VR</title>
+    <meta name="description" content="Solar System Simulation in VR">
+    <!-- Підключення A-Frame -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script>
+        // --- Константи ---
+        const G = 6.67430e-11; // Гравітаційна стала (м^3 кг^-1 с^-2)
+        const SCALE_VISUAL = 1e9; // Масштаб для візуалізації (1 од. A-Frame = 1 млрд метрів)
+        const TIME_SCALE = 86400 * 30; // Прискорення часу (1 секунда реального часу = 30 днів симуляції)
+        const SUN_MASS = 1.989e30; // Маса Сонця (кг)
+
+        // Масив для зберігання даних про планети
+        let planetsData = [];
+
+        // --- Компонент планети ---
+        AFRAME.registerComponent('planet', {
+            schema: {
+                name: {type: 'string', default: ''},
+                mass: {type: 'number', default: 0}, // Маса (кг)
+                dist: {type: 'number', default: 0}, // Середня відстань від Сонця (метри)
+                period: {type: 'number', default: 0}, // Орбітальний період (секунди)
+                radius: {type: 'number', default: 1}, // Візуальний радіус (в од. A-Frame)
+                texture: {type: 'string', default: ''} // URL текстури
+            },
+
+            init: function () {
+                const data = this.data;
+                const el = this.el;
+
+                // Початкова позиція (на осі X)
+                this.pos = [data.dist, 0, 0]; // Реальна позиція в метрах
+
+                // Початкова швидкість (на осі Y) - розрахунок для колової орбіти
+                let initial_vy = 0;
+                if (data.dist > 0) {
+                   // v = sqrt(G*M/r) - для колової орбіти, M - маса Сонця
+                   initial_vy = Math.sqrt(G * SUN_MASS / data.dist);
+                   // Або можна використовувати період: v = 2*PI*r / T
+                   // initial_vy = (2 * Math.PI * data.dist) / data.period;
+                }
+                this.v = [0, initial_vy, 0]; // Реальна швидкість (м/с)
+
+                // Прискорення
+                this.a = [0, 0, 0]; // Реальне прискорення (м/с^2)
+
+                // Встановлення візуальних атрибутів
+                el.setAttribute('geometry', {primitive: 'sphere', radius: data.radius});
+                el.setAttribute('material', {src: data.texture});
+                // Встановлюємо початкову візуальну позицію
+                el.setAttribute('position', {
+                    x: this.pos[0] / SCALE_VISUAL,
+                    y: this.pos[1] / SCALE_VISUAL,
+                    z: this.pos[2] / SCALE_VISUAL
+                });
+
+                // Додаємо дані до глобального масиву
+                planetsData.push({
+                    el: el, // Посилання на A-Frame елемент
+                    name: data.name,
+                    mass: data.mass,
+                    pos: this.pos, // [x, y, z] в метрах
+                    v: this.v,     // [vx, vy, vz] в м/с
+                    a: this.a      // [ax, ay, az] в м/с^2
+                });
+            }
+        });
+
+        // --- Компонент фізики Сонячної системи ---
+        AFRAME.registerComponent('solar-system-physics', {
+            init: function () {
+                console.log("Solar system physics initialized. Planets:", planetsData.length);
+                 if (planetsData.length === 0) {
+                     console.warn("No planets found for physics simulation. Ensure 'planet' components initialize before 'solar-system-physics'. Maybe move this component to an entity *after* planets?");
+                 }
+            },
+
+            tick: function (time, timeDelta) {
+                 if (planetsData.length < 2) return; // Потрібно хоча б 2 тіла для взаємодії
+
+                // Розрахунок кроку часу для симуляції
+                const dt = (timeDelta / 1000) * TIME_SCALE; // Крок часу в секундах симуляції
+
+                // 1. Обчислити прискорення для кожної планети
+                for (let i = 0; i < planetsData.length; i++) {
+                    planetsData[i].a = [0, 0, 0]; // Скинути прискорення
+                    for (let j = 0; j < planetsData.length; j++) {
+                        if (i === j) continue; // Планета не діє сама на себе
+
+                        const pi = planetsData[i];
+                        const pj = planetsData[j];
+
+                        // Вектор відстані r_ij = pos_j - pos_i
+                        const r_vec = [
+                            pj.pos[0] - pi.pos[0],
+                            pj.pos[1] - pi.pos[1],
+                            pj.pos[2] - pi.pos[2]
+                        ];
+
+                        // Квадрат відстані
+                        const r_sq = r_vec[0]**2 + r_vec[1]**2 + r_vec[2]**2;
+                        if (r_sq === 0) continue; // Уникнути ділення на нуль
+
+                        // Відстань
+                        const r_mag = Math.sqrt(r_sq);
+
+                        // Обчислення сили/прискорення: a_i = sum( G * m_j * r_ij / |r_ij|^3 )
+                        const accel_factor = G * pj.mass / (r_mag**3);
+
+                        pi.a[0] += accel_factor * r_vec[0];
+                        pi.a[1] += accel_factor * r_vec[1];
+                        pi.a[2] += accel_factor * r_vec[2];
+                    }
+                }
+
+                // 2. Оновити швидкість та позицію для кожної планети (метод Ейлера)
+                for (let i = 0; i < planetsData.length; i++) {
+                     const p = planetsData[i];
+
+                     // Оновити швидкість: v = v + a * dt
+                     p.v[0] += p.a[0] * dt;
+                     p.v[1] += p.a[1] * dt;
+                     p.v[2] += p.a[2] * dt;
+
+                     // Оновити позицію: pos = pos + v * dt
+                     p.pos[0] += p.v[0] * dt;
+                     p.pos[1] += p.v[1] * dt;
+                     p.pos[2] += p.v[2] * dt;
+
+                     // Оновити візуальну позицію елемента A-Frame
+                     p.el.setAttribute('position', {
+                         x: p.pos[0] / SCALE_VISUAL,
+                         y: p.pos[1] / SCALE_VISUAL,
+                         z: p.pos[2] / SCALE_VISUAL
+                     });
+
+                     // Додамо обертання планети навколо своєї осі (для візуалізації)
+                     // Просте обертання, не пов'язане з фізикою орбіт
+                     const currentRotation = p.el.getAttribute('rotation');
+                     if (currentRotation) {
+                         p.el.setAttribute('rotation', {
+                            x: currentRotation.x,
+                            y: currentRotation.y + 0.1, // Швидкість обертання
+                            z: currentRotation.z
+                         });
+                     }
+                }
+            }
+        });
+
+    </script>
+</head>
+<body>
+    <a-scene background="color: #000010">
+        <!-- Камера для VR -->
+        <a-entity position="0 150 400" rotation="-15 0 0"> <!-- Підняли та віддалили камеру -->
+             <a-camera></a-camera>
+        </a-entity>
+
+        <!-- Джерело світла -->
+        <a-light type="point" intensity="2" position="0 0 0"></a-light>
+        <a-light type="ambient" intensity="0.3"></a-light>
+
+        <!-- Сонячна система - контейнер для фізики -->
+        <!-- Важливо: компонент фізики тут, щоб він ініціалізувався ПІСЛЯ всіх планет -->
+         <a-entity solar-system-physics>
+
+            <!-- Сонце -->
+            <a-entity planet="name: Sun; mass: 1.989e30; dist: 0; period: 0; radius: 69.6; texture: https://www.solarsystemscope.com/textures/download/2k_sun.jpg"></a-entity>
+
+            <!-- Меркурій -->
+            <a-entity planet="name: Mercury; mass: 3.301e23; dist: 57.9e9; period: 7.6e6; radius: 2.44; texture: https://www.solarsystemscope.com/textures/download/2k_mercury.jpg"></a-entity>
+
+            <!-- Венера -->
+            <a-entity planet="name: Venus; mass: 4.867e24; dist: 108.2e9; period: 19.4e6; radius: 6.05; texture: https://www.solarsystemscope.com/textures/download/2k_venus_surface.jpg"></a-entity> <!-- Можна взяти текстуру атмосфери -->
+
+            <!-- Земля -->
+            <a-entity planet="name: Earth; mass: 5.972e24; dist: 149.6e9; period: 31.5e6; radius: 6.37; texture: https://www.solarsystemscope.com/textures/download/2k_earth_daymap.jpg"></a-entity>
+
+            <!-- Марс -->
+            <a-entity planet="name: Mars; mass: 6.417e23; dist: 227.9e9; period: 59.4e6; radius: 3.39; texture: https://www.solarsystemscope.com/textures/download/2k_mars.jpg"></a-entity>
+
+            <!-- Юпітер -->
+            <a-entity planet="name: Jupiter; mass: 1.898e27; dist: 778.5e9; period: 374.3e6; radius: 69.9; texture: https://www.solarsystemscope.com/textures/download/2k_jupiter.jpg"></a-entity>
+
+            <!-- Сатурн -->
+            <a-entity planet="name: Saturn; mass: 5.683e26; dist: 1434e9; period: 929.3e6; radius: 58.2; texture: https://www.solarsystemscope.com/textures/download/2k_saturn.jpg">
+                 <!-- Кільця Сатурна (простий варіант) -->
+                 <a-ring color="#B0A080" radius-inner="70" radius-outer="120" rotation="-60 0 0" material="side: double; opacity: 0.6"></a-ring>
+             </a-entity>
+
+            <!-- Уран -->
+            <a-entity planet="name: Uranus; mass: 8.681e25; dist: 2871e9; period: 2651e6; radius: 25.3; texture: https://www.solarsystemscope.com/textures/download/2k_uranus.jpg"></a-entity>
+
+            <!-- Нептун -->
+            <a-entity planet="name: Neptune; mass: 1.024e26; dist: 4495e9; period: 5200e6; radius: 24.6; texture: https://www.solarsystemscope.com/textures/download/2k_neptune.jpg"></a-entity>
+
+        </a-entity> <!-- Кінець solar-system-physics -->
+
+    </a-scene>
+</body>
+</html>
